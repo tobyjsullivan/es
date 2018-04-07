@@ -1,0 +1,211 @@
+#!/bin/bash
+
+set -e
+
+readonly TF_HOME='./.es'
+
+usage() {
+  local prog="$0"
+  cat <<EOF
+usage: ${prog} <command> [parameters]
+
+Some supported commands:
+
+  aws init --state-bucket <bucket-name> --state-key <key-path> [--state-region <region>] --storage-bucket <bucket-name> [--storage-region <region>]
+  aws add <local-path>
+  aws ls
+  aws get <key>
+EOF
+}
+
+err() {
+  echo "$@" >&2
+}
+
+run_init() {
+  local state_bucket=""
+  local state_key=""
+  local state_region="us-east-1"
+  local storage_bucket=""
+  local storage_region="us-east-1"
+
+  while [[ "$#" -gt "0" ]]; do
+    case "$1" in
+      --state-bucket)
+        state_bucket="$2"
+        shift
+        ;;
+      --state-key)
+        state_key="$2"
+        shift
+        ;;
+      --state-region)
+        state_region="$2"
+        shift
+        ;;
+      --storage-bucket)
+        storage_bucket="$2"
+        shift
+        ;;
+      --storage-region)
+        storage_region="$2"
+        shift
+        ;;
+      *)
+        if [[ "$1" != "" ]]; then
+          err "Unrecognized option: $1"
+          exit 1
+        fi
+    esac
+    shift
+  done
+
+  if [[ "${state_bucket}" = "" ]]; then
+    err "You must specify state file bucket with --state-bucket"
+    exit 1
+  fi
+
+  if [[ "${state_key}" = "" ]]; then
+    err "You must specify state file key with --state-key"
+    exit 1
+  fi
+
+  if [[ "${state_key}" = "" ]]; then
+    err "You must storage bucket name with --storage-bucket"
+    exit 1
+  fi
+
+  local module_dir="$(dirname "$0")/../infra"
+  if [[ "${module_dir}" != /* ]]; then
+    module_dir="$(pwd)/${module_dir}"
+  fi
+  mkdir -p "${TF_HOME}"
+  cat <<EOF > "${TF_HOME}/main.tf"
+terraform {
+  backend "s3" {
+    bucket = "${state_bucket}"
+    key = "${state_key}"
+    region = "${state_region}"
+  }
+}
+
+provider "aws" {
+  region = "${state_region}"
+}
+
+module "es" {
+  source = "${module_dir}"
+  bucket_name = "${storage_bucket}"
+}
+
+output "storage_bucket" {
+  value = "\${module.es.s3_bucket}"
+}
+
+output "key_id" {
+  value = "\${module.es.key_id}"
+}
+EOF
+  cd "${TF_HOME}"
+  terraform init
+  terraform apply
+  cd ..
+}
+
+hash_file() {
+  local file="$1"
+
+  shasum -a 256 < "${file}" | awk '{print $1}'
+}
+
+gen_data_key() {
+  local key_id="$1"
+  
+  aws kms generate-data-key  --key-id "${key_id}" --key-spec AES_256 --query CiphertextBlob --output text
+}
+
+kms_decrypt() {
+  local enc_key_data="$1"
+
+  aws kms decrypt --ciphertext-blob fileb://<(echo "${enc_key_data}" | base64 --decode) --output text --query Plaintext
+}
+
+openssl_encrypt() {
+  local file="$1"
+  local envelope_key="$2"
+
+  openssl enc -aes256 -e -in "${file}" -k "${envelope_key}"
+}
+
+run_add() {
+  if [[ "$#" -ne "1" ]]; then
+    err "Invalid number of options"
+    usage
+    exit 1
+  fi
+
+  local file="$1"
+  local file_hash="$(hash_file "${file}")"
+
+  local s3_bucket="$(cd "${TF_HOME}" && terraform output storage_bucket)"
+  local key_id="$(cd "${TF_HOME}" && terraform output key_id)"
+  echo "Generating envelope key"
+  local enc_key_data="$(gen_data_key "${key_id}")"
+
+  # TODO Avoid giving key same name as file when mapping is implemented
+  echo "Saving data key"
+  local key_s3_path="s3://${s3_bucket}/${file_hash}.key"
+  echo "${enc_key_data}" | base64 --decode | aws s3 cp - "${key_s3_path}"
+
+  echo "Decrypting envelope key"
+  local envelope_key="$(kms_decrypt "${enc_key_data}")"
+  local s3_path="s3://${s3_bucket}/${file_hash}"
+  echo "Encrypting and pushing to S3 ${s3_path}"
+  openssl_encrypt "${file}" "${envelope_key}" | aws s3 cp - "${s3_path}"
+}
+
+run_ls() {
+  # TODO
+  echo "and here we'd run ls..."
+}
+
+run_get() {
+  # TODO
+  echo "and here we'd run get..."
+}
+
+run_destroy() {
+  cat <<EOF
+WARNING: Destroying your configuration will remove AWS resources including your master key and data. This may (but is also not guaranteed to) irreversably destroy all your stored data.
+
+To destroy your es infrastructure:
+
+  cd "${TF_HOME}" && terraform destroy
+EOF
+}
+
+main() {
+  if [[ "$#" -lt "1" ]]; then
+    err "Invalid usage"
+    usage
+    exit 1
+  fi
+
+  local command="$1"
+  shift
+
+  case "${command}" in
+    init) run_init "$@";;
+    add) run_add "$@";;
+    ls) run_ls "$@";;
+    get) run_get "$@";;
+    destroy) run_destroy "$@";;
+    *)
+      err "Unsupported command: ${command}"
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
