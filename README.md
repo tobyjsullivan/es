@@ -37,7 +37,7 @@ from the store.
 This command initializes the data store.
 
 ```sh
-./bin/es init 
+./bin/es init --state-bucket <bucket-name> --state-key <key-path> [--state-region <region>] --storage-bucket <bucket-name> [--storage-region <region>]
 ```
 
 Options:
@@ -56,11 +56,11 @@ Example:
 This command adds the document to storage.
 
 ```sh
-./bin/es put [options] <local-file-path>
+./bin/es add [options] <local-file-path>
 ```
 
 Available options:
-* `--key` (optional) the S3-like key to associate with the file (note, this is not the S3 that the actual blob will be associated with). 
+* `--key` (optional) the S3-like key to associate with the file (note, this is different from the S3 that the actual blob will be associated with). 
 
 #### List documents
 
@@ -100,8 +100,8 @@ This command retrieves a document from storage and decrypts it on local disk.
    * Each document is encrypted with a unique data key.
    * The data key is stored alongside the blob and is encrypted with a master key 
      managed by KMS. This is following best practices of KMS.
-   * Each encrypted document is stored on S3 with a randomly generated key. 
-     These keys are used as a claimscheck in the mapping file.
+   * Each encrypted document is stored on S3 with at a randomly generated path. 
+     These paths are used as a claimscheck identifier in the mapping file.
 * Metadata about documents is stored in a single, encrypted mapping file on S3.
    * This includes descriptors such as human-friendly key, the actual S3 key of the 
      blob, and the S3 key of the encrypted data key.

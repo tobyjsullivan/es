@@ -145,6 +145,8 @@ run_add() {
   fi
 
   local file="$1"
+
+  # TODO Use a random filename instead of hash lest an attacker be able to determine if a specific file is stored.
   local file_hash="$(hash_file "${file}")"
 
   local s3_bucket="$(cd "${TF_HOME}" && terraform output storage_bucket)"
