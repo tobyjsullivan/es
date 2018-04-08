@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -e
+# set -x
 
 readonly TF_HOME='./.es'
 
@@ -80,6 +81,8 @@ run_init() {
     module_dir="$(pwd)/${module_dir}"
   fi
   mkdir -p "${TF_HOME}"
+
+  # TODO Create a strictly permissioned IAM key and store PGP-encrypted access key
   cat <<EOF > "${TF_HOME}/main.tf"
 terraform {
   backend "s3" {
@@ -110,17 +113,33 @@ EOF
   terraform init
   terraform apply
   cd ..
+
+  # Initialize with an empty mapping file if none exists
+  local storage_bucket="$(storage_bucket)"
+  if ! s3_file_exists "${storage_bucket}" "mapping.key"; then
+    generate_and_push_key "${storage_bucket}" "mapping.key"
+    echo "Mapping key initialized."
+  fi
+  if ! s3_file_exists "${storage_bucket}" "mapping"; then
+    true | push_mapping "${storage_bucket}"
+    echo "Mapping file initialized."
+  fi
 }
 
-hash_file() {
-  local file="$1"
+storage_bucket() {
+  cd "${TF_HOME}" && terraform output storage_bucket
+}
 
-  shasum -a 256 < "${file}" | awk '{print $1}'
+s3_file_exists() {
+  local storage_bucket="$1"
+  local file_path="$2"
+
+  aws s3api head-object --bucket "${storage_bucket}" --key "${file_path}" > /dev/null 2> /dev/null
 }
 
 gen_data_key() {
   local key_id="$1"
-  
+
   aws kms generate-data-key  --key-id "${key_id}" --key-spec AES_256 --query CiphertextBlob --output text
 }
 
@@ -131,10 +150,90 @@ kms_decrypt() {
 }
 
 openssl_encrypt() {
-  local file="$1"
-  local envelope_key="$2"
+  local envelope_key="$1"
 
-  openssl enc -aes256 -e -in "${file}" -k "${envelope_key}"
+  openssl enc -aes256 -e -k "${envelope_key}"
+}
+
+openssl_decrypt() {
+  local envelope_key="$1"
+
+  openssl enc -aes256 -d -k "${envelope_key}"
+}
+
+get_mapping_key() {
+  local s3_bucket="$1"
+
+  aws s3 cp "s3://${s3_bucket}/mapping.key" - | base64
+}
+
+pull_mapping() {
+  local s3_bucket="$1"
+
+  local enc_key_data="$(get_mapping_key "${s3_bucket}")"
+  get_and_decrypt_file "${enc_key_data}" "${s3_bucket}" "mapping"
+}
+
+push_mapping() {
+  local s3_bucket="$1"
+
+  local enc_key_data="$(get_mapping_key "${s3_bucket}")"
+  encrypt_and_push_file "${enc_key_data}" "${s3_bucket}" "mapping"
+}
+
+random_name() {
+  head -c 40 /dev/random | xxd -p -c 40
+}
+
+append_mapping() {
+  local s3_bucket="$1"
+  local friendly_path="$2"
+  local s3_file_path="$3"
+  local s3_key_path="$4"
+
+  pull_mapping "${s3_bucket}" \
+    | (cat && echo "${friendly_path},${s3_file_path},${s3_key_path}") \
+    | push_mapping "${s3_bucket}"
+}
+
+key_id() {
+  cd "${TF_HOME}" && terraform output key_id
+}
+
+generate_and_push_key() {
+  local s3_bucket="$1"
+  local key_s3_path="$2"
+
+  local key_id="$(key_id)"
+
+  local key_s3_url="s3://${s3_bucket}/${key_s3_path}"
+
+  local enc_key_data="$(gen_data_key "${key_id}")"
+
+  echo "${enc_key_data}" | base64 --decode | aws s3 cp - "${key_s3_url}" > /dev/null
+
+  echo "${enc_key_data}"
+}
+
+encrypt_and_push_file() {
+  local enc_key_data="$1"
+  local storage_bucket="$2"
+  local file_s3_path="$3"
+
+  local envelope_key="$(kms_decrypt "${enc_key_data}")"
+  local file_s3_url="s3://${storage_bucket}/${file_s3_path}"
+
+  openssl_encrypt "${envelope_key}" | aws s3 cp - "${file_s3_url}"
+}
+
+get_and_decrypt_file() {
+  local enc_key_data="$1"
+  local storage_bucket="$2"
+  local file_s3_path="$3"
+
+  local envelope_key="$(kms_decrypt "${enc_key_data}")"
+  local file_s3_url="s3://${storage_bucket}/${file_s3_path}"
+  aws s3 cp "${file_s3_url}" - | openssl_decrypt "${envelope_key}"
 }
 
 run_add() {
@@ -145,30 +244,20 @@ run_add() {
   fi
 
   local file="$1"
+  local s3_path="$(random_name)"
+  local key_s3_path="$(random_name).key"
 
-  # TODO Use a random filename instead of hash lest an attacker be able to determine if a specific file is stored.
-  local file_hash="$(hash_file "${file}")"
+  local s3_bucket="$(storage_bucket)"
 
-  local s3_bucket="$(cd "${TF_HOME}" && terraform output storage_bucket)"
-  local key_id="$(cd "${TF_HOME}" && terraform output key_id)"
-  echo "Generating envelope key"
-  local enc_key_data="$(gen_data_key "${key_id}")"
-
-  # TODO Avoid giving key same name as file when mapping is implemented
-  echo "Saving data key"
-  local key_s3_path="s3://${s3_bucket}/${file_hash}.key"
-  echo "${enc_key_data}" | base64 --decode | aws s3 cp - "${key_s3_path}"
-
-  echo "Decrypting envelope key"
-  local envelope_key="$(kms_decrypt "${enc_key_data}")"
-  local s3_path="s3://${s3_bucket}/${file_hash}"
-  echo "Encrypting and pushing to S3 ${s3_path}"
-  openssl_encrypt "${file}" "${envelope_key}" | aws s3 cp - "${s3_path}"
+  local enc_key_data="$(generate_and_push_key "${s3_bucket}" "${key_s3_path}")"
+  cat "${file}" | encrypt_and_push_file "${enc_key_data}" "${s3_bucket}" "${s3_path}"
+  append_mapping "${s3_bucket}" "${file}" "${s3_path}" "${key_s3_path}"
 }
 
 run_ls() {
-  # TODO
-  echo "and here we'd run ls..."
+  pull_mapping "$(storage_bucket)" | while read row; do
+    echo "${row}" | cut -d, -f1
+  done
 }
 
 run_get() {
@@ -182,7 +271,7 @@ WARNING: Destroying your configuration will remove AWS resources including your 
 
 To destroy your es infrastructure:
 
-  cd "${TF_HOME}" && terraform destroy
+  aws s3 rm s3://$(storage_bucket) --recursive && cd "${TF_HOME}" && terraform destroy && cd ..
 EOF
 }
 

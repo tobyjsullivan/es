@@ -1,7 +1,7 @@
 # WIP: ES (Encrypted S3 Store)
 
-The objective of this project is to provide an easy (for me)-to-use mechanism for 
-storing data securely on S3. Content should be encrypted both in transit and in 
+The objective of this project is to provide an easy (for me)-to-use mechanism for
+storing data securely on S3. Content should be encrypted both in transit and in
 storage (S3).
 
 # WORK IN PROGRESS
@@ -60,7 +60,7 @@ This command adds the document to storage.
 ```
 
 Available options:
-* `--key` (optional) the S3-like key to associate with the file (note, this is different from the S3 that the actual blob will be associated with). 
+* `--key` (optional) the S3-like key to associate with the file (note, this is different from the S3 that the actual blob will be associated with).
 
 #### List documents
 
@@ -91,22 +91,21 @@ This command retrieves a document from storage and decrypts it on local disk.
 ### Security
 
 * Content should be encrypted in transit and in storage.
-* Any metadata about content (such as filenames) should also be encrypted in 
+* Any metadata about content (such as filenames) should also be encrypted in
   transit and in storage.
 
 ### Architecture
 
 * Data is stored on S3 encrypted with keys managed by KMS.
    * Each document is encrypted with a unique data key.
-   * The data key is stored alongside the blob and is encrypted with a master key 
+   * The data key is stored alongside the blob and is encrypted with a master key
      managed by KMS. This is following best practices of KMS.
-   * Each encrypted document is stored on S3 with at a randomly generated path. 
+   * Each encrypted document is stored on S3 with at a randomly generated path.
      These paths are used as a claimscheck identifier in the mapping file.
 * Metadata about documents is stored in a single, encrypted mapping file on S3.
-   * This includes descriptors such as human-friendly key, the actual S3 key of the 
+   * This includes descriptors such as human-friendly key, the actual S3 key of the
      blob, and the S3 key of the encrypted data key.
-   * The mapping file is stored the same as any other document. Encrypted with a 
+   * The mapping file is stored the same as any other document. Encrypted with a
      co-located data key. However, the filenames for the mapping document and its key
      must be deterministic (i.e., non-random) so that they can be found without any
      other prerequisite knowledge.
-
