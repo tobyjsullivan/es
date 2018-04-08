@@ -1,12 +1,8 @@
-# WIP: ES (Encrypted S3 Store)
+# ES (Encrypted S3 Store)
 
-The objective of this project is to provide an easy (for me)-to-use mechanism for
+The objective of this project is to provide a simple command line tool for
 storing data securely on S3. Content should be encrypted both in transit and in
 storage (S3).
-
-# WORK IN PROGRESS
-
-This project is a work in progress and will not work.
 
 ## Prerequisites
 
@@ -18,13 +14,7 @@ The following software must be installed to run.
 
 ## Design
 
-This design is theoretical and an artifact of the brainstorming process. Not all
-features (if any) are implemented yet.
-
 ### User Experience
-
-There should be a simple CLI tool which allows the addition and retreival of content
-from the store.
 
 #### Help
 
@@ -34,7 +24,7 @@ from the store.
 
 #### Init
 
-This command initializes the data store.
+This command initializes the data store. Type `yes` to build S3 infrastructure when prompted by terraform.
 
 ```sh
 ./bin/es init --state-bucket <bucket-name> --state-key <key-path> [--state-region <region>] --storage-bucket <bucket-name> [--storage-region <region>]
@@ -43,7 +33,9 @@ This command initializes the data store.
 Options:
 * `--tfstate-bucket` The S3 bucket to store terraform state in.
 * `--tfstate-key` The S3 key of the terraform state file.
+* `--tfstate-region` The S3 region of the terraform state file. (Default: us-east-1)
 * `--storage-bucket` The name to use for the S3 bucket for storing encrypted data.
+* `--storage-region` The region of the S3 bucket for storing encrypted data. (Default: us-east-1)
 
 Example:
 
@@ -56,28 +48,15 @@ Example:
 This command adds the document to storage.
 
 ```sh
-./bin/es add [options] <local-file-path>
+./bin/es add <local-file-path>
 ```
-
-Available options:
-* `--key` (optional) the S3-like key to associate with the file (note, this is different from the S3 that the actual blob will be associated with).
 
 #### List documents
 
 This command lists the documents in storage.
 
 ```sh
-./bin/es ls [options]
-```
-
-Available options:
-* `--key-prefix` (optional) List files starting with the specified key prefix.
-
-Example Output
-
-```
-/path/to/file1.ext
-/path/to/file2.ext
+./bin/es ls
 ```
 
 #### Get a document
@@ -90,8 +69,8 @@ This command retrieves a document from storage and decrypts it on local disk.
 
 ### Security
 
-* Content should be encrypted in transit and in storage.
-* Any metadata about content (such as filenames) should also be encrypted in
+* Content is encrypted in transit and in storage.
+* Any metadata about content (such as filenames) is also be encrypted in
   transit and in storage.
 
 ### Architecture
