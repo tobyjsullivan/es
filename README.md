@@ -85,7 +85,7 @@ Example Output
 This command retrieves a document from storage and decrypts it on local disk.
 
 ```sh
-./bin/es get <document-key>
+./bin/es get <document-key> <output-file>
 ```
 
 ### Security

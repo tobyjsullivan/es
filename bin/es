@@ -15,7 +15,7 @@ Some supported commands:
   aws init --state-bucket <bucket-name> --state-key <key-path> [--state-region <region>] --storage-bucket <bucket-name> [--storage-region <region>]
   aws add <local-path>
   aws ls
-  aws get <key>
+  aws get <key> <output-file>
 EOF
 }
 
@@ -161,23 +161,24 @@ openssl_decrypt() {
   openssl enc -aes256 -d -k "${envelope_key}"
 }
 
-get_mapping_key() {
-  local s3_bucket="$1"
+get_key_file() {
+  local storage_bucket="$1"
+  local key_path="$2"
 
-  aws s3 cp "s3://${s3_bucket}/mapping.key" - | base64
+  aws s3 cp "s3://${storage_bucket}/${key_path}" - | base64
 }
 
 pull_mapping() {
   local s3_bucket="$1"
 
-  local enc_key_data="$(get_mapping_key "${s3_bucket}")"
+  local enc_key_data="$(get_key_file "${s3_bucket}" "mapping.key")"
   get_and_decrypt_file "${enc_key_data}" "${s3_bucket}" "mapping"
 }
 
 push_mapping() {
   local s3_bucket="$1"
 
-  local enc_key_data="$(get_mapping_key "${s3_bucket}")"
+  local enc_key_data="$(get_key_file "${s3_bucket}" "mapping.key")"
   encrypt_and_push_file "${enc_key_data}" "${s3_bucket}" "mapping"
 }
 
@@ -251,18 +252,50 @@ run_add() {
 
   local enc_key_data="$(generate_and_push_key "${s3_bucket}" "${key_s3_path}")"
   cat "${file}" | encrypt_and_push_file "${enc_key_data}" "${s3_bucket}" "${s3_path}"
-  append_mapping "${s3_bucket}" "${file}" "${s3_path}" "${key_s3_path}"
+
+  # TODO Fix filename so that it does not include path or path can be specified or something...
+  local lookup_key="$(basename ${file})"
+  append_mapping "${s3_bucket}" "${lookup_key}" "${s3_path}" "${key_s3_path}"
+  echo "Added: ${lookup_key}"
 }
 
 run_ls() {
-  pull_mapping "$(storage_bucket)" | while read row; do
+  mapping="$(pull_mapping "$(storage_bucket)")"
+  while read row; do
     echo "${row}" | cut -d, -f1
-  done
+  done <<< "${mapping}"
 }
 
 run_get() {
-  # TODO
-  echo "and here we'd run get..."
+  if [[ "$#" -ne "2" ]]; then
+    err "Invalid number of options"
+    usage
+    exit 1
+  fi
+
+  local lookup_key="$1"
+  local out_file="$2"
+
+  local s3_bucket="$(storage_bucket)"
+
+  local file_s3_path
+  local key_s3_path
+  while read row; do
+    if [[ "$(echo "${row}" | cut -d, -f1)" = "${lookup_key}" ]]; then
+      file_s3_path="$(echo "${row}" | cut -d, -f2)"
+      key_s3_path="$(echo "${row}" | cut -d, -f3)"
+    fi
+  done <<< "$(pull_mapping "${s3_bucket}")"
+
+  if [[ "${file_s3_path}" = "" ]]; then
+    err "File not found."
+    exit 1
+  fi
+
+  # Get and decrypt file
+  enc_key_data="$(get_key_file "${s3_bucket}" "${key_s3_path}")"
+  get_and_decrypt_file "${enc_key_data}" "${s3_bucket}" "${file_s3_path}" > "${out_file}"
+  echo "Downloaded: ${lookup_key} => ${out_file}"
 }
 
 run_destroy() {
