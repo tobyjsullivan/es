@@ -324,7 +324,7 @@ main() {
     ls) run_ls "$@";;
     get) run_get "$@";;
     destroy) run_destroy "$@";;
-    help) usage;;
+    help|--help|-h) usage;;
     *)
       err "Unsupported command: ${command}"
       usage
